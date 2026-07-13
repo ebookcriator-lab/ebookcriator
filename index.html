@@ -313,8 +313,6 @@
     <div class="stitch"></div>
 
     <div class="shelf" id="shelf"></div>
-
-    <button class="signout" id="btn-signout">Sair da conta →</button>
   </aside>
 
   <main>
@@ -382,8 +380,8 @@
    (Settings → API no painel do Supabase)
    ============================================================ */
 const CONFIG = {
-  SUPABASE_URL: 'https://khxxaekwsbktrlecjtbu.supabase.co',
-  SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY: 'sb_publishable_MH1egZSyRv5YX5j6mVfILg_cRVst...','
+  SUPABASE_URL: 'https://SEU-PROJETO.supabase.co',
+  SUPABASE_ANON_KEY: 'SUA_ANON_KEY_AQUI'
 };
 
 const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
@@ -427,10 +425,6 @@ document.getElementById('auth-form').addEventListener('submit', async (e) => {
   }
 });
 
-document.getElementById('btn-signout').addEventListener('click', async () => {
-  await sb.auth.signOut();
-});
-
 function traduzErro(msg){
   if(/already registered/i.test(msg)) return 'Este e-mail já tem uma conta.';
   if(/invalid login/i.test(msg)) return 'E-mail ou senha incorretos.';
@@ -443,6 +437,17 @@ sb.auth.onAuthStateChange((_event, session) => {
   renderAuthState();
 });
 
+// Login automático e invisível: se ninguém estiver logado, cria uma
+// sessão anônima sozinho (sem tela, sem senha). Isso mantém as regras
+// de segurança (RLS) funcionando por trás, só sem pedir e-mail/senha.
+(async () => {
+  const { data } = await sb.auth.getSession();
+  if(!data.session){
+    const { error } = await sb.auth.signInAnonymously();
+    if(error) console.error('Falha no login automático:', error.message);
+  }
+})();
+
 async function renderAuthState(){
   const authScreen = document.getElementById('auth-screen');
   const app = document.getElementById('app');
@@ -451,7 +456,8 @@ async function renderAuthState(){
     app.classList.add('visible');
     await loadProjects();
   } else {
-    authScreen.style.display = 'flex';
+    // Enquanto o login automático ainda está acontecendo, não mostra nada.
+    authScreen.style.display = 'none';
     app.classList.remove('visible');
   }
 }
