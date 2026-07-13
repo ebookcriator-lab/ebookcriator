@@ -222,6 +222,21 @@
   .dropzone:hover, .dropzone.drag{ border-color: var(--teal); background: rgba(0,215,182,.05); }
   .dropzone .hint{ font-size:12.5px; color:var(--ink-muted); margin-top:6px; }
 
+  /* ---------- Miniaturas de referência ---------- */
+  .ref-thumb{
+    position:relative; width:96px; height:96px; border-radius:10px;
+    overflow:hidden; border:1px solid var(--line); background: var(--navy-2);
+  }
+  .ref-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .ref-thumb .remove-btn{
+    position:absolute; top:4px; right:4px; width:20px; height:20px;
+    border-radius:50%; background: rgba(10,22,40,.85); border:none;
+    color:var(--white); font-size:12px; cursor:pointer; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .ref-thumb .remove-btn:hover{ background: #ff5a5a; }
+  .ref-thumb.loading{ display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--ink-muted); }
+
   /* ---------- Modal ---------- */
   .overlay{
     position:fixed; inset:0; background: rgba(6,11,20,.72);
@@ -346,6 +361,21 @@
             ilustrações → diagramação. Ainda não implementado nesta versão base.
           </p>
         </div>
+      </div>
+
+      <div class="card" style="margin-top:24px;">
+        <h3>Referências visuais de design</h3>
+        <p class="muted" style="font-size:13px; margin-bottom:14px;">
+          Envie capas, paletas ou páginas de outros livros que representem o estilo
+          que você quer para este e-book. A IA vai usar essas imagens como guia visual.
+        </p>
+        <div class="dropzone" id="ref-dropzone">
+          <div id="ref-dropzone-label">Arraste imagens aqui ou clique para escolher (pode selecionar várias)</div>
+          <div class="hint">JPG, PNG ou WEBP</div>
+        </div>
+        <input type="file" id="ref-file-input" accept="image/*" multiple style="display:none;" />
+        <div id="ref-upload-status" class="muted" style="font-size:12.5px; margin-top:8px; min-height:16px;"></div>
+        <div id="ref-thumbnails" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;"></div>
       </div>
     </div>
   </main>
@@ -543,6 +573,114 @@ function renderProjectView(){
     p.word_count ? `${p.word_count.toLocaleString('pt-BR')} palavras` : 'Sem contagem de palavras ainda';
   document.getElementById('pv-file').textContent =
     p.source_filename ? `📄 ${p.source_filename}` : 'Nenhum arquivo enviado ainda.';
+  renderReferenceThumbnails(p);
+}
+
+/* ---------- Referências visuais de design ---------- */
+const refDropzone = document.getElementById('ref-dropzone');
+const refFileInput = document.getElementById('ref-file-input');
+
+refDropzone.addEventListener('click', () => refFileInput.click());
+refDropzone.addEventListener('dragover', e => { e.preventDefault(); refDropzone.classList.add('drag'); });
+refDropzone.addEventListener('dragleave', () => refDropzone.classList.remove('drag'));
+refDropzone.addEventListener('drop', e => {
+  e.preventDefault(); refDropzone.classList.remove('drag');
+  if(e.dataTransfer.files.length) handleReferenceUpload(Array.from(e.dataTransfer.files));
+});
+refFileInput.addEventListener('change', () => {
+  if(refFileInput.files.length) handleReferenceUpload(Array.from(refFileInput.files));
+  refFileInput.value = '';
+});
+
+async function handleReferenceUpload(files){
+  const statusEl = document.getElementById('ref-upload-status');
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+
+  const imageFiles = files.filter(f => f.type.startsWith('image/'));
+  if(imageFiles.length === 0){
+    statusEl.textContent = 'Selecione arquivos de imagem (JPG, PNG ou WEBP).';
+    return;
+  }
+
+  const newPaths = [];
+  for(let i = 0; i < imageFiles.length; i++){
+    const file = imageFiles[i];
+    statusEl.textContent = `Enviando imagem ${i+1} de ${imageFiles.length}...`;
+    const path = `${currentUser.id}/${p.id}/references/${Date.now()}-${file.name}`;
+    const { error } = await sb.storage.from('uploads').upload(path, file);
+    if(error){
+      statusEl.textContent = 'Erro ao enviar: ' + error.message;
+      return;
+    }
+    newPaths.push(path);
+  }
+
+  const updatedPaths = [...(p.reference_image_paths || []), ...newPaths];
+  const { error: updateError } = await sb
+    .from('projects')
+    .update({ reference_image_paths: updatedPaths })
+    .eq('id', p.id);
+
+  if(updateError){
+    statusEl.textContent = 'Erro ao salvar referências: ' + updateError.message;
+    return;
+  }
+
+  statusEl.textContent = `${imageFiles.length} imagem(ns) adicionada(s).`;
+  await loadProjects();
+}
+
+async function renderReferenceThumbnails(project){
+  const container = document.getElementById('ref-thumbnails');
+  container.innerHTML = '';
+  const paths = project.reference_image_paths || [];
+
+  for(const path of paths){
+    const thumb = document.createElement('div');
+    thumb.className = 'ref-thumb loading';
+    thumb.textContent = '...';
+    container.appendChild(thumb);
+
+    const { data, error } = await sb.storage.from('uploads').createSignedUrl(path, 3600);
+    thumb.classList.remove('loading');
+    thumb.textContent = '';
+
+    if(error || !data){
+      thumb.textContent = 'erro';
+      continue;
+    }
+
+    const img = document.createElement('img');
+    img.src = data.signedUrl;
+    thumb.appendChild(img);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remover referência';
+    removeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await removeReferenceImage(project.id, path);
+    });
+    thumb.appendChild(removeBtn);
+  }
+}
+
+async function removeReferenceImage(projectId, path){
+  const p = currentProjects.find(x => x.id === projectId);
+  if(!p) return;
+
+  await sb.storage.from('uploads').remove([path]);
+
+  const updatedPaths = (p.reference_image_paths || []).filter(x => x !== path);
+  const { error } = await sb
+    .from('projects')
+    .update({ reference_image_paths: updatedPaths })
+    .eq('id', projectId);
+
+  if(error){ console.error(error); return; }
+  await loadProjects();
 }
 
 function renderChart(){
