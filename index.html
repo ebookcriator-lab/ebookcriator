@@ -25,6 +25,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js"></script>
 
 <style>
   /* ============================================================
@@ -359,12 +360,12 @@
       <input type="text" id="np-title" placeholder="Ex: A Travessia" />
     </div>
     <div class="field">
-      <label>Texto do livro (.txt ou .md)</label>
+      <label>Texto do livro (.txt, .md ou .pdf)</label>
       <div class="dropzone" id="dropzone">
         <div id="dropzone-label">Arraste o arquivo aqui ou clique para escolher</div>
-        <div class="hint">Suporte inicial: .txt / .md — outros formatos em breve</div>
+        <div class="hint">Suporte: .txt / .md / .pdf</div>
       </div>
-      <input type="file" id="np-file" accept=".txt,.md" style="display:none;" />
+      <input type="file" id="np-file" accept=".txt,.md,.pdf" style="display:none;" />
     </div>
     <div id="np-error" style="color:#ff8a8a; font-size:13px; min-height:16px;"></div>
     <div class="actions">
@@ -385,6 +386,28 @@ const CONFIG = {
 };
 
 const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+// Configura o "worker" do pdf.js (necessário para extrair texto de PDFs)
+if(window.pdfjsLib){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js';
+}
+
+async function extractTextFromFile(file){
+  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  if(!isPdf){
+    return await file.text();
+  }
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  let fullText = '';
+  for(let i = 1; i <= pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join(' ');
+    fullText += pageText + '\n\n';
+  }
+  return fullText;
+}
 
 let currentUser = null;
 let currentProjects = [];
@@ -580,13 +603,23 @@ document.getElementById('np-create').addEventListener('click', async () => {
   const title = document.getElementById('np-title').value.trim() || 'Sem título';
   const file = fileInput.files[0];
   const errEl = document.getElementById('np-error');
+  const createBtn = document.getElementById('np-create');
   errEl.textContent = '';
 
   if(!file){ errEl.textContent = 'Selecione um arquivo de texto.'; return; }
 
+  createBtn.disabled = true;
+  createBtn.textContent = 'Lendo arquivo...';
+
   try{
-    const text = await file.text();
+    const text = await extractTextFromFile(file);
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+
+    if(wordCount === 0){
+      throw new Error('Não consegui extrair texto desse arquivo (pode ser um PDF de páginas escaneadas/imagem).');
+    }
+
+    createBtn.textContent = 'Enviando...';
 
     const path = `${currentUser.id}/${Date.now()}-${file.name}`;
     const { error: uploadError } = await sb.storage.from('uploads').upload(path, file);
@@ -612,6 +645,9 @@ document.getElementById('np-create').addEventListener('click', async () => {
   }catch(err){
     console.error(err);
     errEl.textContent = 'Erro ao criar projeto: ' + err.message;
+  }finally{
+    createBtn.disabled = false;
+    createBtn.textContent = 'Criar projeto';
   }
 });
 
