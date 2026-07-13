@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ebook Studio</title>
+<meta name="theme-color" content="#0A1628" />
+
+<!-- ============================================================
+     PWA MANIFEST (embutido via data-URI para manter 1 arquivo só)
+     ============================================================ -->
+<link rel="manifest" href='data:application/manifest+json,{
+  "name": "Ebook Studio",
+  "short_name": "EbookStudio",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "%230A1628",
+  "theme_color": "%230A1628",
+  "icons": []
+}' />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+
+<style>
+  /* ============================================================
+     DESIGN TOKENS
+     Paleta: navy profundo (base editorial), dourado (prestígio/
+     encadernação), branco (papel), verde-água (ação/vivo).
+     Tipografia: DM Sans em todos os papéis, com contraste extremo
+     de peso e tracking para simular hierarquia de masthead
+     editorial sem sair de uma única família.
+     Assinatura visual: "linha de costura" — trilho tracejado
+     dourado com pequenos nós, referência a encadernação artesanal,
+     usado como divisor e como indicador de progresso de capítulos.
+     ============================================================ */
+  :root{
+    --navy: #0A1628;
+    --navy-2: #101f38;
+    --navy-3: #16294a;
+    --gold: #C9A84C;
+    --gold-dim: #C9A84C99;
+    --white: #FFFFFF;
+    --teal: #00D7B6;
+    --ink-muted: rgba(255,255,255,.58);
+    --ink-faint: rgba(255,255,255,.30);
+    --line: rgba(201,168,76,.22);
+    --radius: 14px;
+    --shadow: 0 20px 60px -20px rgba(0,0,0,.6);
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ height:100%; }
+  body{
+    margin:0;
+    background: radial-gradient(1200px 600px at 15% -10%, #12213a 0%, var(--navy) 55%) fixed;
+    color: var(--white);
+    font-family: 'DM Sans', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection{ background: var(--gold); color: var(--navy); }
+
+  /* ---------- Utility ---------- */
+  .eyebrow{
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+  .muted{ color: var(--ink-muted); }
+
+  /* ---------- Stitch divider (signature element) ---------- */
+  .stitch{
+    height: 1px;
+    background-image: repeating-linear-gradient(
+      to right, var(--gold-dim) 0 6px, transparent 6px 14px
+    );
+    position: relative;
+    margin: 28px 0;
+  }
+  .stitch::before, .stitch::after{
+    content:'';
+    position:absolute; top:50%; transform:translateY(-50%);
+    width:4px; height:4px; border-radius:50%;
+    background: var(--gold);
+  }
+  .stitch::before{ left:0; }
+  .stitch::after{ right:0; }
+
+  /* ============================================================
+     APP SHELL
+     ============================================================ */
+  #app{ display:none; min-height:100vh; grid-template-columns: 300px 1fr; }
+  #app.visible{ display:grid; }
+
+  /* ---------- Sidebar: "estante" de projetos ---------- */
+  aside{
+    border-right: 1px solid var(--line);
+    padding: 28px 22px;
+    display:flex; flex-direction:column;
+    background: linear-gradient(180deg, #0d1c33, #0A1628);
+  }
+  .brand{
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    margin-bottom: 2px;
+  }
+  .brand span{ color: var(--gold); }
+
+  .new-project-btn{
+    margin-top: 20px;
+    width:100%;
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--teal);
+    background: transparent;
+    color: var(--teal);
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 14px;
+    cursor:pointer;
+    transition: background .15s ease, color .15s ease;
+  }
+  .new-project-btn:hover{ background: var(--teal); color: var(--navy); }
+
+  .shelf{ margin-top: 22px; flex:1; overflow-y:auto; }
+  .shelf-item{
+    display:flex; align-items:center; gap: 12px;
+    padding: 12px 10px;
+    border-radius: 10px;
+    cursor:pointer;
+    position:relative;
+    margin-bottom: 4px;
+  }
+  .shelf-item:hover{ background: rgba(255,255,255,.04); }
+  .shelf-item.active{ background: rgba(201,168,76,.10); }
+  .spine{
+    width:4px; align-self:stretch; border-radius:2px;
+    background: var(--ink-faint);
+    flex-shrink:0;
+  }
+  .shelf-item.active .spine{ background: var(--gold); }
+  .shelf-item .meta{ min-width:0; }
+  .shelf-item .title{
+    font-size: 14px; font-weight:600;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .shelf-item .status{
+    font-size: 11px; color: var(--ink-muted); text-transform:capitalize;
+  }
+
+  .signout{
+    margin-top: 14px; background:none; border:none;
+    color: var(--ink-muted); font-family:inherit; font-size:13px;
+    cursor:pointer; text-align:left; padding: 8px 4px;
+  }
+  .signout:hover{ color: var(--white); }
+
+  /* ---------- Main stage ---------- */
+  main{ padding: 40px 48px; overflow-y:auto; }
+  h1.stage-title{
+    font-size: 34px; font-weight:800; letter-spacing:-.02em; margin:0 0 6px;
+  }
+
+  .grid-2{ display:grid; grid-template-columns: 1.3fr 1fr; gap: 24px; margin-top: 28px; }
+  .card{
+    background: var(--navy-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+  }
+  .card h3{ margin:0 0 4px; font-size:15px; letter-spacing:.02em; }
+
+  /* ---------- Empty state ---------- */
+  .empty{
+    text-align:center; padding: 90px 20px; max-width:460px; margin: 40px auto 0;
+  }
+  .empty .glyph{
+    width:56px; height:56px; margin:0 auto 20px;
+    border: 1.5px solid var(--gold); border-radius: 8px;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--gold); font-size: 22px; font-weight:700;
+  }
+  .empty h2{ font-size:22px; margin: 0 0 10px; }
+  .empty p{ color: var(--ink-muted); font-size:14.5px; line-height:1.6; margin:0 0 24px; }
+
+  /* ---------- Buttons / inputs ---------- */
+  .btn-primary{
+    padding: 12px 22px; border-radius:10px; border:none;
+    background: var(--gold); color: var(--navy);
+    font-family:inherit; font-weight:700; font-size:14px; cursor:pointer;
+  }
+  .btn-primary:hover{ filter: brightness(1.08); }
+  .btn-ghost{
+    padding: 11px 20px; border-radius:10px;
+    border:1px solid var(--line); background:transparent; color:var(--white);
+    font-family:inherit; font-size:14px; cursor:pointer;
+  }
+  input[type=text], input[type=email], input[type=password]{
+    width:100%; padding: 12px 14px; border-radius:10px;
+    border:1px solid var(--line); background: var(--navy-2);
+    color:var(--white); font-family:inherit; font-size:14px;
+    outline:none;
+  }
+  input:focus{ border-color: var(--gold); }
+  label{ font-size:12.5px; color:var(--ink-muted); display:block; margin-bottom:6px; }
+
+  .dropzone{
+    border: 1.5px dashed var(--line); border-radius: 12px;
+    padding: 30px 20px; text-align:center; cursor:pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .dropzone:hover, .dropzone.drag{ border-color: var(--teal); background: rgba(0,215,182,.05); }
+  .dropzone .hint{ font-size:12.5px; color:var(--ink-muted); margin-top:6px; }
+
+  /* ---------- Modal ---------- */
+  .overlay{
+    position:fixed; inset:0; background: rgba(6,11,20,.72);
+    display:none; align-items:center; justify-content:center; z-index:50;
+    backdrop-filter: blur(3px);
+  }
+  .overlay.visible{ display:flex; }
+  .modal{
+    width: 420px; max-width: 92vw; background: var(--navy-3);
+    border:1px solid var(--line); border-radius: var(--radius);
+    padding: 28px; box-shadow: var(--shadow);
+  }
+  .modal h3{ margin:0 0 18px; font-size:19px; }
+  .modal .field{ margin-bottom:16px; }
+  .modal .actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+
+  /* ============================================================
+     AUTH SCREEN
+     ============================================================ */
+  #auth-screen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center;
+    padding: 20px;
+  }
+  .auth-card{
+    width: 380px; max-width:100%;
+    background: var(--navy-3); border:1px solid var(--line);
+    border-radius: var(--radius); padding: 36px 32px;
+    box-shadow: var(--shadow);
+  }
+  .auth-card .brand{ font-size:24px; margin-bottom:2px; }
+  .auth-card .eyebrow{ display:block; margin-bottom: 18px; }
+  .auth-tabs{ display:flex; gap:18px; margin-bottom: 22px; }
+  .auth-tab{
+    background:none; border:none; color:var(--ink-muted); font-family:inherit;
+    font-size:13.5px; font-weight:600; cursor:pointer; padding-bottom:6px;
+    border-bottom: 2px solid transparent;
+  }
+  .auth-tab.active{ color:var(--white); border-color: var(--gold); }
+  #auth-error{ color:#ff8a8a; font-size:13px; margin-top:10px; min-height:16px; }
+  #auth-msg{ color: var(--teal); font-size:13px; margin-top:10px; min-height:16px; }
+
+  @media (max-width: 860px){
+    #app.visible{ grid-template-columns: 1fr; }
+    aside{
+      position:fixed; z-index:40; inset:0 25% 0 0; transform: translateX(-105%);
+      transition: transform .2s ease;
+    }
+    aside.open{ transform:none; }
+    main{ padding: 24px; }
+    .grid-2{ grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= AUTH SCREEN ================= -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="brand">Ebook<span>Studio</span></div>
+    <span class="eyebrow">Editoração assistida por IA</span>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="signin">Entrar</button>
+      <button class="auth-tab" data-tab="signup">Criar conta</button>
+    </div>
+
+    <form id="auth-form">
+      <div class="field" style="margin-bottom:14px;">
+        <label>E-mail</label>
+        <input type="email" id="auth-email" required autocomplete="email" />
+      </div>
+      <div class="field" style="margin-bottom:6px;">
+        <label>Senha</label>
+        <input type="password" id="auth-password" required autocomplete="current-password" minlength="6" />
+      </div>
+      <div id="auth-error"></div>
+      <div id="auth-msg"></div>
+      <button type="submit" class="btn-primary" style="width:100%; margin-top:16px;" id="auth-submit">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<!-- ================= APP SHELL ================= -->
+<div id="app">
+  <aside>
+    <div class="brand">Ebook<span>Studio</span></div>
+    <span class="eyebrow">Sua biblioteca</span>
+    <button class="new-project-btn" id="btn-new-project">+ Novo projeto</button>
+
+    <div class="stitch"></div>
+
+    <div class="shelf" id="shelf"></div>
+
+    <button class="signout" id="btn-signout">Sair da conta →</button>
+  </aside>
+
+  <main>
+    <div id="empty-state" class="empty" style="display:none;">
+      <div class="glyph">E</div>
+      <h2>Sua biblioteca está vazia</h2>
+      <p>Crie o primeiro projeto enviando o texto do seu livro. A partir dele, o Ebook Studio vai estruturar capítulos, sugerir um design e gerar as ilustrações.</p>
+      <button class="btn-primary" id="btn-new-project-empty">Criar primeiro projeto</button>
+    </div>
+
+    <div id="project-view" style="display:none;">
+      <span class="eyebrow" id="pv-status">rascunho</span>
+      <h1 class="stage-title" id="pv-title">—</h1>
+      <p class="muted" id="pv-meta">—</p>
+
+      <div class="stitch"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Visão geral da biblioteca</h3>
+          <p class="muted" style="font-size:13px; margin-bottom:14px;">Distribuição de status dos seus projetos</p>
+          <canvas id="chart-status" height="180"></canvas>
+        </div>
+        <div class="card">
+          <h3>Arquivo de origem</h3>
+          <p class="muted" style="font-size:13px;" id="pv-file">Nenhum arquivo enviado ainda.</p>
+          <div class="stitch"></div>
+          <p class="muted" style="font-size:12.5px;">
+            Próxima etapa do pipeline: análise de texto por IA → geração de design →
+            ilustrações → diagramação. Ainda não implementado nesta versão base.
+          </p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ================= MODAL: NOVO PROJETO ================= -->
+<div class="overlay" id="modal-overlay">
+  <div class="modal">
+    <h3>Novo projeto</h3>
+    <div class="field">
+      <label>Título do e-book</label>
+      <input type="text" id="np-title" placeholder="Ex: A Travessia" />
+    </div>
+    <div class="field">
+      <label>Texto do livro (.txt ou .md)</label>
+      <div class="dropzone" id="dropzone">
+        <div id="dropzone-label">Arraste o arquivo aqui ou clique para escolher</div>
+        <div class="hint">Suporte inicial: .txt / .md — outros formatos em breve</div>
+      </div>
+      <input type="file" id="np-file" accept=".txt,.md" style="display:none;" />
+    </div>
+    <div id="np-error" style="color:#ff8a8a; font-size:13px; min-height:16px;"></div>
+    <div class="actions">
+      <button class="btn-ghost" id="np-cancel">Cancelar</button>
+      <button class="btn-primary" id="np-create">Criar projeto</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIGURAÇÃO — troque pelos dados do SEU projeto Supabase
+   (Settings → API no painel do Supabase)
+   ============================================================ */
+const CONFIG = {
+  SUPABASE_URL: 'https://khxxaekwsbktrlecjtbu.supabase.co',
+  SUPABASE_ANON_KEY: 'SUPABASE_ANON_KEY: 'sb_publishable_MH1egZSyRv5YX5j6mVfILg_cRVst...','
+};
+
+const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+let currentUser = null;
+let currentProjects = [];
+let activeProjectId = null;
+let statusChart = null;
+
+/* ---------- Auth ---------- */
+const authTabs = document.querySelectorAll('.auth-tab');
+let authMode = 'signin';
+authTabs.forEach(tab => tab.addEventListener('click', () => {
+  authTabs.forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  authMode = tab.dataset.tab;
+  document.getElementById('auth-submit').textContent = authMode === 'signin' ? 'Entrar' : 'Criar conta';
+  document.getElementById('auth-error').textContent = '';
+  document.getElementById('auth-msg').textContent = '';
+}));
+
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errEl = document.getElementById('auth-error');
+  const msgEl = document.getElementById('auth-msg');
+  errEl.textContent = ''; msgEl.textContent = '';
+
+  try{
+    if(authMode === 'signin'){
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if(error) throw error;
+    } else {
+      const { error } = await sb.auth.signUp({ email, password });
+      if(error) throw error;
+      msgEl.textContent = 'Conta criada! Verifique seu e-mail se a confirmação estiver ativa, ou já pode entrar.';
+    }
+  }catch(err){
+    errEl.textContent = traduzErro(err.message);
+  }
+});
+
+document.getElementById('btn-signout').addEventListener('click', async () => {
+  await sb.auth.signOut();
+});
+
+function traduzErro(msg){
+  if(/already registered/i.test(msg)) return 'Este e-mail já tem uma conta.';
+  if(/invalid login/i.test(msg)) return 'E-mail ou senha incorretos.';
+  if(/password/i.test(msg)) return 'A senha precisa ter ao menos 6 caracteres.';
+  return msg;
+}
+
+sb.auth.onAuthStateChange((_event, session) => {
+  currentUser = session?.user ?? null;
+  renderAuthState();
+});
+
+async function renderAuthState(){
+  const authScreen = document.getElementById('auth-screen');
+  const app = document.getElementById('app');
+  if(currentUser){
+    authScreen.style.display = 'none';
+    app.classList.add('visible');
+    await loadProjects();
+  } else {
+    authScreen.style.display = 'flex';
+    app.classList.remove('visible');
+  }
+}
+
+/* ---------- Projetos ---------- */
+async function loadProjects(){
+  const { data, error } = await sb
+    .from('projects')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if(error){ console.error(error); return; }
+  currentProjects = data || [];
+  renderShelf();
+  renderChart();
+
+  if(currentProjects.length === 0){
+    document.getElementById('empty-state').style.display = 'block';
+    document.getElementById('project-view').style.display = 'none';
+  } else {
+    document.getElementById('empty-state').style.display = 'none';
+    if(!activeProjectId) activeProjectId = currentProjects[0].id;
+    renderProjectView();
+  }
+}
+
+function renderShelf(){
+  const shelf = document.getElementById('shelf');
+  shelf.innerHTML = '';
+  currentProjects.forEach(p => {
+    const item = document.createElement('div');
+    item.className = 'shelf-item' + (p.id === activeProjectId ? ' active' : '');
+    item.innerHTML = `
+      <div class="spine"></div>
+      <div class="meta">
+        <div class="title">${escapeHtml(p.title)}</div>
+        <div class="status">${escapeHtml(p.status)}</div>
+      </div>`;
+    item.addEventListener('click', () => {
+      activeProjectId = p.id;
+      document.getElementById('project-view').style.display = 'block';
+      document.getElementById('empty-state').style.display = 'none';
+      renderShelf();
+      renderProjectView();
+    });
+    shelf.appendChild(item);
+  });
+}
+
+function renderProjectView(){
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+  document.getElementById('project-view').style.display = 'block';
+  document.getElementById('pv-status').textContent = p.status;
+  document.getElementById('pv-title').textContent = p.title;
+  document.getElementById('pv-meta').textContent =
+    p.word_count ? `${p.word_count.toLocaleString('pt-BR')} palavras` : 'Sem contagem de palavras ainda';
+  document.getElementById('pv-file').textContent =
+    p.source_filename ? `📄 ${p.source_filename}` : 'Nenhum arquivo enviado ainda.';
+}
+
+function renderChart(){
+  const counts = {};
+  currentProjects.forEach(p => { counts[p.status] = (counts[p.status]||0) + 1; });
+  const labels = Object.keys(counts);
+  const values = Object.values(counts);
+
+  const ctx = document.getElementById('chart-status');
+  if(!ctx) return;
+  if(statusChart) statusChart.destroy();
+  statusChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: labels.length ? labels : ['sem dados'],
+      datasets: [{
+        data: values.length ? values : [1],
+        backgroundColor: ['#C9A84C', '#00D7B6', '#3d5a80', '#7c93b3'],
+        borderColor: '#16294a',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      plugins: { legend: { labels: { color: '#ffffff99', font: { family: 'DM Sans' } } } }
+    }
+  });
+}
+
+/* ---------- Novo projeto: modal + upload ---------- */
+const overlay = document.getElementById('modal-overlay');
+const openModal = () => { overlay.classList.add('visible'); };
+const closeModal = () => {
+  overlay.classList.remove('visible');
+  document.getElementById('np-title').value = '';
+  document.getElementById('np-file').value = '';
+  document.getElementById('dropzone-label').textContent = 'Arraste o arquivo aqui ou clique para escolher';
+  document.getElementById('np-error').textContent = '';
+};
+
+document.getElementById('btn-new-project').addEventListener('click', openModal);
+document.getElementById('btn-new-project-empty').addEventListener('click', openModal);
+document.getElementById('np-cancel').addEventListener('click', closeModal);
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('np-file');
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if(e.dataTransfer.files.length){
+    fileInput.files = e.dataTransfer.files;
+    document.getElementById('dropzone-label').textContent = e.dataTransfer.files[0].name;
+  }
+});
+fileInput.addEventListener('change', () => {
+  if(fileInput.files.length) document.getElementById('dropzone-label').textContent = fileInput.files[0].name;
+});
+
+document.getElementById('np-create').addEventListener('click', async () => {
+  const title = document.getElementById('np-title').value.trim() || 'Sem título';
+  const file = fileInput.files[0];
+  const errEl = document.getElementById('np-error');
+  errEl.textContent = '';
+
+  if(!file){ errEl.textContent = 'Selecione um arquivo de texto.'; return; }
+
+  try{
+    const text = await file.text();
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+
+    const path = `${currentUser.id}/${Date.now()}-${file.name}`;
+    const { error: uploadError } = await sb.storage.from('uploads').upload(path, file);
+    if(uploadError) throw uploadError;
+
+    const { data: inserted, error: insertError } = await sb
+      .from('projects')
+      .insert({
+        user_id: currentUser.id,
+        title,
+        status: 'draft',
+        source_filename: file.name,
+        source_file_path: path,
+        word_count: wordCount
+      })
+      .select()
+      .single();
+    if(insertError) throw insertError;
+
+    activeProjectId = inserted.id;
+    closeModal();
+    await loadProjects();
+  }catch(err){
+    console.error(err);
+    errEl.textContent = 'Erro ao criar projeto: ' + err.message;
+  }
+});
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str ?? '';
+  return d.innerHTML;
+}
+
+/* ---------- Service worker (arquivo separado sw.js) ---------- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {
+      console.warn('Service worker não registrado — ok em ambiente de desenvolvimento local.');
+    });
+  });
+}
+</script>
+</body>
+</html>
