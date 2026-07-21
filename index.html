@@ -396,8 +396,10 @@
           <p style="font-size:12.5px; color:var(--ink-muted); margin:20px 0 8px;">Pontos de ilustração sugeridos</p>
           <div id="brief-illustrations"></div>
           <button class="btn-ghost" id="btn-reanalyze" style="margin-top:18px;">Refazer análise</button>
+          <button class="btn-primary" id="btn-mark-reference" style="margin-top:18px; margin-left:10px;">⭐ Marcar como referência de qualidade</button>
         </div>
         <div id="brief-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
+        <div id="reference-status" class="muted" style="font-size:12.5px; margin-top:6px; min-height:16px;"></div>
       </div>
 
       <div class="card" style="margin-top:24px;">
@@ -426,6 +428,20 @@
       <label>Título do e-book</label>
       <input type="text" id="np-title" placeholder="Ex: A Travessia" />
     </div>
+    <div class="field">
+      <label>Categoria do e-book</label>
+      <select id="np-category" style="width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:var(--navy-2); color:var(--white); font-family:inherit; font-size:14px; outline:none;">
+        <option value="saude">Saúde e bem-estar</option>
+        <option value="negocios">Negócios e carreira</option>
+        <option value="autoajuda">Autoajuda e desenvolvimento pessoal</option>
+        <option value="infantil">Infantil</option>
+        <option value="ficcao">Ficção</option>
+        <option value="tecnico">Técnico / didático</option>
+        <option value="geral">Geral / outro</option>
+      </select>
+      <div class="hint" style="margin-top:6px;">Usado para conectar este projeto aos seus e-books anteriores da mesma categoria.</div>
+    </div>
+
     <div class="field">
       <label>Ideia ou trecho de texto (opcional)</label>
       <textarea id="np-idea" rows="4" placeholder="Descreva sua ideia para o e-book, ou cole um trecho de texto que já escreveu. A IA usa isso para escrever ou completar o conteúdo."
@@ -730,6 +746,46 @@ async function runDesignAnalysis(){
 document.getElementById('btn-analyze').addEventListener('click', runDesignAnalysis);
 document.getElementById('btn-reanalyze').addEventListener('click', runDesignAnalysis);
 
+document.getElementById('btn-mark-reference').addEventListener('click', async () => {
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+
+  const statusEl = document.getElementById('reference-status');
+  const btn = document.getElementById('btn-mark-reference');
+  btn.disabled = true;
+  statusEl.textContent = 'Salvando no banco de referências...';
+
+  try{
+    if(!p.source_file_path){
+      throw new Error('Este projeto não tem um arquivo de texto associado.');
+    }
+
+    const { data: fileData, error: downloadError } = await sb.storage.from('uploads').download(p.source_file_path);
+    if(downloadError) throw downloadError;
+
+    const text = await extractTextFromFile(fileData, p.source_filename);
+    const excerpt = text.trim().split(/\s+/).slice(0, 2500).join(' ');
+
+    const { error: insertError } = await sb.from('library_entries').insert({
+      user_id: currentUser.id,
+      project_id: p.id,
+      category: p.category || 'geral',
+      title: p.title,
+      text_excerpt: excerpt,
+      design_brief: p.design_tokens || {},
+      reference_image_paths: p.reference_image_paths || []
+    });
+    if(insertError) throw insertError;
+
+    statusEl.textContent = '✓ Salvo! Novos projetos desta categoria vão usar isso como referência.';
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro: ' + err.message;
+  }finally{
+    btn.disabled = false;
+  }
+});
+
 /* ---------- Referências visuais de design ---------- */
 const refDropzone = document.getElementById('ref-dropzone');
 const refFileInput = document.getElementById('ref-file-input');
@@ -869,6 +925,7 @@ const openModal = () => { overlay.classList.add('visible'); };
 const closeModal = () => {
   overlay.classList.remove('visible');
   document.getElementById('np-title').value = '';
+  document.getElementById('np-category').value = 'saude';
   document.getElementById('np-idea').value = '';
   document.getElementById('np-pages').value = '20';
   document.getElementById('np-chapters').value = '5';
@@ -900,6 +957,7 @@ fileInput.addEventListener('change', () => {
 
 document.getElementById('np-create').addEventListener('click', async () => {
   const title = document.getElementById('np-title').value.trim() || 'Sem título';
+  const category = document.getElementById('np-category').value;
   const idea = document.getElementById('np-idea').value.trim();
   const file = fileInput.files[0];
   const errEl = document.getElementById('np-error');
@@ -926,13 +984,26 @@ document.getElementById('np-create').addEventListener('click', async () => {
         throw new Error('Não consegui extrair texto desse arquivo (pode ser um PDF de páginas escaneadas/imagem).');
       }
     } else {
+      createBtn.textContent = 'Buscando referências aprovadas...';
+      const { data: libraryEntries } = await sb
+        .from('library_entries')
+        .select('title, text_excerpt')
+        .eq('category', category)
+        .order('created_at', { ascending: false })
+        .limit(2);
+
+      const styleExamples = (libraryEntries || []).map(e => ({
+        title: e.title,
+        excerpt: (e.text_excerpt || '').slice(0, 1500)
+      }));
+
       createBtn.textContent = 'A IA está escrevendo o conteúdo...';
       const pages = parseInt(document.getElementById('np-pages').value, 10) || 20;
       const chapters = parseInt(document.getElementById('np-chapters').value, 10) || 5;
       const tone = document.getElementById('np-tone').value;
 
       const { data, error } = await sb.functions.invoke('generate-book-content', {
-        body: { idea, targetPages: pages, chapterCount: chapters, tone }
+        body: { idea, targetPages: pages, chapterCount: chapters, tone, styleExamples }
       });
       if(error) throw error;
       if(data?.error) throw new Error(data.error);
@@ -955,6 +1026,7 @@ document.getElementById('np-create').addEventListener('click', async () => {
       .insert({
         user_id: currentUser.id,
         title,
+        category,
         status: 'draft',
         source_filename: sourceFilename,
         source_file_path: path,
