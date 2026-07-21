@@ -237,6 +237,19 @@
   .ref-thumb .remove-btn:hover{ background: #ff5a5a; }
   .ref-thumb.loading{ display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--ink-muted); }
 
+  /* ---------- Brief de design ---------- */
+  .palette-swatch{
+    width:56px; height:56px; border-radius:10px; border:1px solid var(--line);
+    display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px;
+    font-size:9px; color:rgba(0,0,0,.55); font-weight:600;
+  }
+  .illustration-point{
+    border-left:2px solid var(--gold); padding:8px 0 8px 14px; margin-bottom:10px;
+  }
+  .illustration-point .chapter{ font-size:13px; font-weight:600; }
+  .illustration-point .placement{ font-size:11.5px; color: var(--teal); text-transform:uppercase; letter-spacing:.05em; }
+  .illustration-point .concept{ font-size:13px; color:var(--ink-muted); margin-top:2px; }
+
   /* ---------- Modal ---------- */
   .overlay{
     position:fixed; inset:0; background: rgba(6,11,20,.72);
@@ -364,6 +377,30 @@
       </div>
 
       <div class="card" style="margin-top:24px;">
+        <h3>Brief de design (IA)</h3>
+        <p class="muted" style="font-size:13px; margin-bottom:14px;">
+          A IA lê o conteúdo do e-book e sugere tom, paleta, tipografia e pontos de
+          ilustração — a base para a geração de imagens e a diagramação.
+        </p>
+        <div id="brief-empty">
+          <button class="btn-primary" id="btn-analyze">Gerar brief de design com IA</button>
+        </div>
+        <div id="brief-content" style="display:none;">
+          <div class="stitch"></div>
+          <p style="font-size:13.5px;"><strong>Resumo:</strong> <span id="brief-summary"></span></p>
+          <p style="font-size:13.5px;"><strong>Tom:</strong> <span id="brief-tone"></span></p>
+          <p style="font-size:13.5px;"><strong>Público-alvo:</strong> <span id="brief-audience"></span></p>
+          <p style="font-size:13.5px;"><strong>Tipografia:</strong> <span id="brief-typography"></span></p>
+          <p style="font-size:12.5px; color:var(--ink-muted); margin:14px 0 6px;">Paleta sugerida</p>
+          <div id="brief-palette" style="display:flex; gap:10px;"></div>
+          <p style="font-size:12.5px; color:var(--ink-muted); margin:20px 0 8px;">Pontos de ilustração sugeridos</p>
+          <div id="brief-illustrations"></div>
+          <button class="btn-ghost" id="btn-reanalyze" style="margin-top:18px;">Refazer análise</button>
+        </div>
+        <div id="brief-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
+      </div>
+
+      <div class="card" style="margin-top:24px;">
         <h3>Referências visuais de design</h3>
         <p class="muted" style="font-size:13px; margin-bottom:14px;">
           Envie capas, paletas ou páginas de outros livros que representem o estilo
@@ -450,8 +487,9 @@ if(window.pdfjsLib){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 
-async function extractTextFromFile(file){
-  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+async function extractTextFromFile(file, filename){
+  const name = filename || file.name || '';
+  const isPdf = file.type === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
   if(!isPdf){
     return await file.text();
   }
@@ -602,7 +640,95 @@ function renderProjectView(){
   document.getElementById('pv-file').textContent =
     p.source_filename ? `📄 ${p.source_filename}` : 'Nenhum arquivo enviado ainda.';
   renderReferenceThumbnails(p);
+  renderDesignBrief(p);
 }
+
+/* ---------- Brief de design por IA ---------- */
+function renderDesignBrief(project){
+  const brief = project.design_tokens;
+  const hasBrief = brief && Object.keys(brief).length > 0;
+
+  document.getElementById('brief-empty').style.display = hasBrief ? 'none' : 'block';
+  document.getElementById('brief-content').style.display = hasBrief ? 'block' : 'none';
+  document.getElementById('brief-status').textContent = '';
+
+  if(!hasBrief) return;
+
+  document.getElementById('brief-summary').textContent = brief.summary || '—';
+  document.getElementById('brief-tone').textContent = brief.tone || '—';
+  document.getElementById('brief-audience').textContent = brief.target_audience || '—';
+  document.getElementById('brief-typography').textContent = brief.typography_notes || '—';
+
+  const paletteEl = document.getElementById('brief-palette');
+  paletteEl.innerHTML = '';
+  (brief.palette || []).forEach(hex => {
+    const swatch = document.createElement('div');
+    swatch.className = 'palette-swatch';
+    swatch.style.background = hex;
+    swatch.textContent = hex;
+    paletteEl.appendChild(swatch);
+  });
+
+  const illustrationsEl = document.getElementById('brief-illustrations');
+  illustrationsEl.innerHTML = '';
+  (brief.illustration_points || []).forEach(point => {
+    const item = document.createElement('div');
+    item.className = 'illustration-point';
+    item.innerHTML = `
+      <div class="chapter">${escapeHtml(point.chapter || '')}</div>
+      <div class="placement">${escapeHtml(point.placement || '')}</div>
+      <div class="concept">${escapeHtml(point.concept || '')}</div>`;
+    illustrationsEl.appendChild(item);
+  });
+}
+
+async function runDesignAnalysis(){
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+
+  const statusEl = document.getElementById('brief-status');
+  const btn = document.getElementById('btn-analyze');
+  const reBtn = document.getElementById('btn-reanalyze');
+  if(btn) btn.disabled = true;
+  if(reBtn) reBtn.disabled = true;
+
+  try{
+    if(!p.source_file_path){
+      throw new Error('Este projeto não tem um arquivo de texto associado.');
+    }
+
+    statusEl.textContent = 'Lendo o conteúdo do e-book...';
+    const { data: fileData, error: downloadError } = await sb.storage.from('uploads').download(p.source_file_path);
+    if(downloadError) throw downloadError;
+
+    const text = await extractTextFromFile(fileData, p.source_filename);
+
+    statusEl.textContent = 'A IA está analisando o conteúdo e montando o brief...';
+    const { data, error } = await sb.functions.invoke('analyze-book-content', {
+      body: { text, title: p.title }
+    });
+    if(error) throw error;
+    if(data?.error) throw new Error(data.error);
+
+    const { error: updateError } = await sb
+      .from('projects')
+      .update({ design_tokens: data.brief, status: 'design_ready' })
+      .eq('id', p.id);
+    if(updateError) throw updateError;
+
+    statusEl.textContent = '';
+    await loadProjects();
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro: ' + err.message;
+  }finally{
+    if(btn) btn.disabled = false;
+    if(reBtn) reBtn.disabled = false;
+  }
+}
+
+document.getElementById('btn-analyze').addEventListener('click', runDesignAnalysis);
+document.getElementById('btn-reanalyze').addEventListener('click', runDesignAnalysis);
 
 /* ---------- Referências visuais de design ---------- */
 const refDropzone = document.getElementById('ref-dropzone');
