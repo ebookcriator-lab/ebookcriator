@@ -390,7 +390,12 @@
       <input type="text" id="np-title" placeholder="Ex: A Travessia" />
     </div>
     <div class="field">
-      <label>Texto do livro (.txt, .md ou .pdf)</label>
+      <label>Ideia ou trecho de texto (opcional)</label>
+      <textarea id="np-idea" rows="4" placeholder="Descreva sua ideia para o e-book, ou cole um trecho de texto que já escreveu. A IA usa isso para escrever ou completar o conteúdo."
+        style="width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:var(--navy-2); color:var(--white); font-family:inherit; font-size:14px; outline:none; resize:vertical;"></textarea>
+    </div>
+    <div class="field">
+      <label>Ou envie o texto do livro (.txt, .md ou .pdf)</label>
       <div class="dropzone" id="dropzone">
         <div id="dropzone-label">Arraste o arquivo aqui ou clique para escolher</div>
         <div class="hint">Suporte: .txt / .md / .pdf</div>
@@ -715,6 +720,7 @@ const openModal = () => { overlay.classList.add('visible'); };
 const closeModal = () => {
   overlay.classList.remove('visible');
   document.getElementById('np-title').value = '';
+  document.getElementById('np-idea').value = '';
   document.getElementById('np-file').value = '';
   document.getElementById('dropzone-label').textContent = 'Arraste o arquivo aqui ou clique para escolher';
   document.getElementById('np-error').textContent = '';
@@ -742,28 +748,48 @@ fileInput.addEventListener('change', () => {
 
 document.getElementById('np-create').addEventListener('click', async () => {
   const title = document.getElementById('np-title').value.trim() || 'Sem título';
+  const idea = document.getElementById('np-idea').value.trim();
   const file = fileInput.files[0];
   const errEl = document.getElementById('np-error');
   const createBtn = document.getElementById('np-create');
   errEl.textContent = '';
 
-  if(!file){ errEl.textContent = 'Selecione um arquivo de texto.'; return; }
+  if(!file && !idea){
+    errEl.textContent = 'Envie um arquivo ou descreva sua ideia no campo de texto.';
+    return;
+  }
 
   createBtn.disabled = true;
-  createBtn.textContent = 'Lendo arquivo...';
 
   try{
-    const text = await extractTextFromFile(file);
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    let text, sourceFilename, sourceBlob;
 
-    if(wordCount === 0){
-      throw new Error('Não consegui extrair texto desse arquivo (pode ser um PDF de páginas escaneadas/imagem).');
+    if(file){
+      createBtn.textContent = 'Lendo arquivo...';
+      text = await extractTextFromFile(file);
+      sourceFilename = file.name;
+      sourceBlob = file;
+
+      if(text.trim().split(/\s+/).filter(Boolean).length === 0){
+        throw new Error('Não consegui extrair texto desse arquivo (pode ser um PDF de páginas escaneadas/imagem).');
+      }
+    } else {
+      createBtn.textContent = 'A IA está escrevendo o conteúdo...';
+      const { data, error } = await sb.functions.invoke('generate-book-content', { body: { idea } });
+      if(error) throw error;
+      if(data?.error) throw new Error(data.error);
+
+      text = data.text;
+      sourceFilename = 'gerado-por-ia.txt';
+      sourceBlob = new Blob([text], { type: 'text/plain' });
     }
+
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
 
     createBtn.textContent = 'Enviando...';
 
-    const path = `${currentUser.id}/${Date.now()}-${file.name}`;
-    const { error: uploadError } = await sb.storage.from('uploads').upload(path, file);
+    const path = `${currentUser.id}/${Date.now()}-${sourceFilename}`;
+    const { error: uploadError } = await sb.storage.from('uploads').upload(path, sourceBlob);
     if(uploadError) throw uploadError;
 
     const { data: inserted, error: insertError } = await sb
@@ -772,9 +798,10 @@ document.getElementById('np-create').addEventListener('click', async () => {
         user_id: currentUser.id,
         title,
         status: 'draft',
-        source_filename: file.name,
+        source_filename: sourceFilename,
         source_file_path: path,
-        word_count: wordCount
+        word_count: wordCount,
+        idea_prompt: idea || null
       })
       .select()
       .single();
