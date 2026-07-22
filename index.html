@@ -1233,12 +1233,32 @@ function hexToRgba(hex, alpha){
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+function extractChapterKey(text){
+  if(!text) return null;
+  const numMatch = text.match(/Cap[ií]tulo\s+(\d+)/i);
+  if(numMatch) return `num:${numMatch[1]}`;
+  if(/considera[cç][oõ]es\s+finais/i.test(text)) return 'final';
+  if(/introdu[cç][aã]o/i.test(text)) return 'intro';
+  return null;
+}
+
+function chaptersMatch(chapterTitle, pointChapterText){
+  const keyA = extractChapterKey(chapterTitle);
+  const keyB = extractChapterKey(pointChapterText);
+  if(keyA && keyB) return keyA === keyB;
+  // fallback: nenhum dos dois tinha um marcador claro — compara texto normalizado
+  if(!chapterTitle || !pointChapterText) return false;
+  const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9à-ú\s]/gi, '').trim();
+  const a = normalize(chapterTitle), b = normalize(pointChapterText);
+  return a.includes(b.slice(0, 12)) || b.includes(a.slice(0, 12));
+}
+
 /* ---------- Prévia diagramada (visualizador página a página) ---------- */
 let bookPages = []; // array de strings HTML, uma por página
 let currentPageIndex = 0;
 
 function parseChapters(fullText){
-  const regex = /(Cap[ií]tulo\s+\d+[:\-]?\s*[^\n]*)/gi;
+  const regex = /(Cap[ií]tulo\s+\d+[:\-]?\s*[^\n]*|Introdu[cç][aã]o[:\-]?\s*[^\n]*|Considera[cç][oõ]es\s+finais[:\-]?\s*[^\n]*)/gi;
   const matches = [...fullText.matchAll(regex)];
   if(matches.length === 0){
     return [{ title: null, body: fullText }];
@@ -1358,11 +1378,11 @@ async function buildBookPages(){
       bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${summaryInner}</div>`);
     }
 
+    const usedIllustrationUrls = new Set();
+
     chapters.forEach((chapter, chapterIdx) => {
       const pages = chunkParagraphsIntoPages(chapter.body, wordsPerPage);
-      const matchedIllustration = illustrationsWithUrls.find(ill =>
-        chapter.title && ill.prompt.toLowerCase().includes(chapter.title.toLowerCase().slice(0, 15))
-      );
+      const matchedIllustrations = illustrationsWithUrls.filter(ill => chaptersMatch(chapter.title, ill.prompt));
       const chapterParts = chapter.title ? splitChapterTitle(chapter.title) : null;
       const chapterHeaderLabel = chapterParts?.rest || chapter.title || bookTitleUpper;
       const palette = brief.palette || [];
@@ -1372,6 +1392,7 @@ async function buildBookPages(){
       pages.forEach((paragraphs, pageIdxInChapter) => {
         pageCounter++;
         const isChapterOpening = pageIdxInChapter === 0;
+        const illustrationForThisPage = matchedIllustrations[pageIdxInChapter];
         let inner = `<div class="running-header"><span>${escapeHtml(bookTitleUpper)}</span><span>${escapeHtml((chapterHeaderLabel || '').toUpperCase())}</span></div>`;
 
         if(isChapterOpening && (chapterParts?.number || chapterParts?.rest)){
@@ -1387,13 +1408,14 @@ async function buildBookPages(){
           }
           inner += `</div>`;
         }
-        if(isChapterOpening && matchedIllustration){
-          inner += `<img class="chapter-image" src="${matchedIllustration.url}" />`;
+        if(illustrationForThisPage){
+          inner += `<img class="chapter-image" src="${illustrationForThisPage.url}" />`;
+          usedIllustrationUrls.add(illustrationForThisPage.url);
         }
 
         inner += paragraphs.map((par, i) => {
           const isFirstParagraphOfPage = i === 0;
-          const useDropCap = isChapterOpening && isFirstParagraphOfPage && !matchedIllustration;
+          const useDropCap = isChapterOpening && isFirstParagraphOfPage && !illustrationForThisPage;
           const cls = [isFirstParagraphOfPage ? 'no-indent' : '', useDropCap ? 'drop-cap' : ''].filter(Boolean).join(' ');
           return `<p class="${cls}">${escapeHtml(par)}</p>`;
         }).join('');
@@ -1401,6 +1423,18 @@ async function buildBookPages(){
         inner += `<div class="page-footer">${pageCounter}</div>`;
         bookPages.push(`<div class="book-page" style="--book-accent:${chapterAccent};">${inner}</div>`);
       });
+    });
+
+    // Rede de segurança: ilustrações que não casaram com nenhum capítulo
+    // ainda entram no e-book, como páginas próprias
+    const leftoverIllustrations = illustrationsWithUrls.filter(ill => !usedIllustrationUrls.has(ill.url));
+    leftoverIllustrations.forEach(ill => {
+      pageCounter++;
+      const inner = `
+        <div class="running-header"><span>${escapeHtml(bookTitleUpper)}</span><span>ILUSTRAÇÃO</span></div>
+        <img class="chapter-image" src="${ill.url}" style="margin-top:20px;" />
+        <div class="page-footer">${pageCounter}</div>`;
+      bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${inner}</div>`);
     });
 
     // Página final: sobre o autor
