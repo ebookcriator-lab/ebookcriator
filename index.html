@@ -236,6 +236,8 @@
   }
   .ref-thumb .remove-btn:hover{ background: #ff5a5a; }
   .ref-thumb.loading{ display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--ink-muted); }
+  .ref-thumb.clickable{ cursor:pointer; transition: transform .15s ease; }
+  .ref-thumb.clickable:hover{ transform: scale(1.04); border-color: var(--gold); }
 
   /* ---------- Brief de design ---------- */
   .palette-swatch{
@@ -508,6 +510,14 @@
       <button class="btn-ghost" id="np-cancel">Cancelar</button>
       <button class="btn-primary" id="np-create">Criar projeto</button>
     </div>
+  </div>
+</div>
+
+<!-- ================= LIGHTBOX: VISUALIZAÇÃO AMPLIADA ================= -->
+<div class="overlay" id="lightbox-overlay">
+  <div style="max-width:92vw; max-height:92vh; position:relative;">
+    <img id="lightbox-img" style="max-width:92vw; max-height:92vh; border-radius:12px; display:block; box-shadow: var(--shadow);" />
+    <button id="lightbox-close" style="position:absolute; top:-16px; right:-16px; width:34px; height:34px; border-radius:50%; background:var(--gold); border:none; color:var(--navy); font-size:16px; font-weight:700; cursor:pointer;">×</button>
   </div>
 </div>
 
@@ -1015,8 +1025,25 @@ async function renderGeneratedImages(project){
     img.src = urlData.signedUrl;
     img.title = row.prompt || '';
     thumb.appendChild(img);
+
+    thumb.classList.add('clickable');
+    thumb.addEventListener('click', () => openLightbox(urlData.signedUrl));
   }
 }
+
+/* ---------- Lightbox: visualização ampliada ---------- */
+function openLightbox(url){
+  document.getElementById('lightbox-img').src = url;
+  document.getElementById('lightbox-overlay').classList.add('visible');
+}
+function closeLightbox(){
+  document.getElementById('lightbox-overlay').classList.remove('visible');
+  document.getElementById('lightbox-img').src = '';
+}
+document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+document.getElementById('lightbox-overlay').addEventListener('click', (e) => {
+  if(e.target.id === 'lightbox-overlay') closeLightbox();
+});
 
 /* ---------- Referências visuais de design ---------- */
 const refDropzone = document.getElementById('ref-dropzone');
