@@ -1175,9 +1175,26 @@ async function renderGeneratedImages(project){
     img.title = row.prompt || '';
     thumb.appendChild(img);
 
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remover esta imagem';
+    removeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await removeGeneratedImage(row.id, row.result_path, project);
+    });
+    thumb.appendChild(removeBtn);
+
     thumb.classList.add('clickable');
     thumb.addEventListener('click', () => openLightbox(urlData.signedUrl));
   }
+}
+
+async function removeGeneratedImage(imageId, resultPath, project){
+  await sb.storage.from('generated-assets').remove([resultPath]);
+  const { error } = await sb.from('generated_images').delete().eq('id', imageId);
+  if(error){ console.error(error); return; }
+  await renderGeneratedImages(project);
 }
 
 /* ---------- Perfil do autor ---------- */
