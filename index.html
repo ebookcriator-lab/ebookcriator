@@ -409,6 +409,20 @@
           referências visuais que você enviou.
         </p>
         <button class="btn-primary" id="btn-generate-cover">🎨 Gerar capa</button>
+
+        <div class="stitch"></div>
+
+        <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin-bottom:12px;">
+          <input type="checkbox" id="use-project-refs" checked style="width:auto;" />
+          Usar também as referências visuais gerais do projeto
+        </label>
+
+        <label style="font-size:11px;">Referência extra só para a próxima geração (opcional)</label>
+        <div class="dropzone" id="oneoff-dropzone" style="padding:16px;">
+          <div id="oneoff-dropzone-label" style="font-size:13px;">Arraste imagens aqui ou clique para escolher</div>
+        </div>
+        <input type="file" id="oneoff-ref-input" accept="image/*" multiple style="display:none;" />
+
         <div id="image-gen-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
         <div id="generated-gallery" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;"></div>
       </div>
@@ -807,6 +821,48 @@ document.getElementById('btn-mark-reference').addEventListener('click', async ()
   }
 });
 
+/* ---------- Referência extra (só para a próxima geração) ---------- */
+let oneOffReferenceFiles = [];
+
+const oneoffDropzone = document.getElementById('oneoff-dropzone');
+const oneoffInput = document.getElementById('oneoff-ref-input');
+
+oneoffDropzone.addEventListener('click', () => oneoffInput.click());
+oneoffDropzone.addEventListener('dragover', e => { e.preventDefault(); oneoffDropzone.classList.add('drag'); });
+oneoffDropzone.addEventListener('dragleave', () => oneoffDropzone.classList.remove('drag'));
+oneoffDropzone.addEventListener('drop', e => {
+  e.preventDefault(); oneoffDropzone.classList.remove('drag');
+  if(e.dataTransfer.files.length) setOneOffFiles(Array.from(e.dataTransfer.files));
+});
+oneoffInput.addEventListener('change', () => {
+  if(oneoffInput.files.length) setOneOffFiles(Array.from(oneoffInput.files));
+});
+
+function setOneOffFiles(files){
+  oneOffReferenceFiles = files.filter(f => f.type.startsWith('image/')).slice(0, 3);
+  const label = document.getElementById('oneoff-dropzone-label');
+  label.textContent = oneOffReferenceFiles.length > 0
+    ? `${oneOffReferenceFiles.length} imagem(ns) selecionada(s) para a próxima geração`
+    : 'Arraste imagens aqui ou clique para escolher';
+}
+
+async function buildReferenceImagesForGeneration(project){
+  const results = [];
+
+  for(const file of oneOffReferenceFiles){
+    const base64 = await blobToBase64(file);
+    results.push({ mimeType: file.type || 'image/jpeg', data: base64 });
+  }
+
+  const useProjectRefs = document.getElementById('use-project-refs').checked;
+  if(useProjectRefs && results.length < 3){
+    const persistent = await getReferenceImagesBase64(project, 3 - results.length);
+    results.push(...persistent);
+  }
+
+  return results.slice(0, 3);
+}
+
 /* ---------- Geração de imagens por IA ---------- */
 async function blobToBase64(blob){
   const buffer = await blob.arrayBuffer();
@@ -837,7 +893,7 @@ async function generateAndSaveImage(prompt, role){
   const p = currentProjects.find(x => x.id === activeProjectId);
   if(!p) return;
 
-  const referenceImages = await getReferenceImagesBase64(p);
+  const referenceImages = await buildReferenceImagesForGeneration(p);
 
   const { data, error } = await sb.functions.invoke('generate-image', {
     body: { prompt, referenceImages }
@@ -897,6 +953,7 @@ document.getElementById('btn-generate-cover').addEventListener('click', async ()
   try{
     await generateAndSaveImage(buildCoverPrompt(p), 'cover');
     statusEl.textContent = '✓ Capa gerada!';
+    setOneOffFiles([]);
     await renderGeneratedImages(p);
   }catch(err){
     console.error(err);
@@ -917,6 +974,7 @@ async function generateIllustrationForPoint(point, btn){
   try{
     await generateAndSaveImage(buildIllustrationPrompt(p, point), 'chapter-illustration');
     statusEl.textContent = '✓ Ilustração gerada!';
+    setOneOffFiles([]);
     await renderGeneratedImages(p);
   }catch(err){
     console.error(err);
