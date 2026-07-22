@@ -429,6 +429,7 @@
     <div class="brand">Ebook<span>Studio</span></div>
     <span class="eyebrow">Sua biblioteca</span>
     <button class="new-project-btn" id="btn-new-project">+ Novo projeto</button>
+    <button class="signout" id="btn-edit-profile" style="text-align:left; margin-top:4px;">👤 Meu perfil de autor</button>
 
     <div class="stitch"></div>
 
@@ -625,6 +626,47 @@
   <div style="max-width:92vw; max-height:92vh; position:relative;">
     <img id="lightbox-img" style="max-width:92vw; max-height:92vh; border-radius:12px; display:block; box-shadow: var(--shadow);" />
     <button id="lightbox-close" style="position:absolute; top:-16px; right:-16px; width:34px; height:34px; border-radius:50%; background:var(--gold); border:none; color:var(--navy); font-size:16px; font-weight:700; cursor:pointer;">×</button>
+  </div>
+</div>
+
+<!-- ================= MODAL: PERFIL DO AUTOR ================= -->
+<div class="overlay" id="profile-overlay">
+  <div class="modal">
+    <h3>Meu perfil de autor</h3>
+    <p class="muted" style="font-size:12.5px; margin-bottom:16px;">Isso aparece automaticamente na última página de todos os seus e-books.</p>
+    <div class="field">
+      <label>Nome</label>
+      <input type="text" id="profile-name" />
+    </div>
+    <div class="field">
+      <label>Bio curta</label>
+      <textarea id="profile-bio" rows="3" style="width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:var(--navy-2); color:var(--white); font-family:inherit; font-size:14px; outline:none; resize:vertical;"></textarea>
+    </div>
+    <div class="field">
+      <label>Instagram</label>
+      <input type="text" id="profile-instagram" placeholder="@seuusuario" />
+    </div>
+    <div class="field">
+      <label>WhatsApp</label>
+      <input type="text" id="profile-whatsapp" placeholder="(00) 00000-0000" />
+    </div>
+    <div class="field">
+      <label>Site</label>
+      <input type="text" id="profile-website" />
+    </div>
+    <div class="field">
+      <label>Endereço do consultório</label>
+      <input type="text" id="profile-address" />
+    </div>
+    <div class="field">
+      <label>E-mail</label>
+      <input type="text" id="profile-email" />
+    </div>
+    <div id="profile-error" style="color:#ff8a8a; font-size:13px; min-height:16px;"></div>
+    <div class="actions">
+      <button class="btn-ghost" id="profile-cancel">Cancelar</button>
+      <button class="btn-primary" id="profile-save">Salvar</button>
+    </div>
   </div>
 </div>
 
@@ -1138,6 +1180,59 @@ async function renderGeneratedImages(project){
   }
 }
 
+/* ---------- Perfil do autor ---------- */
+const profileOverlay = document.getElementById('profile-overlay');
+
+document.getElementById('btn-edit-profile').addEventListener('click', async () => {
+  const { data, error } = await sb.from('author_profiles').select('*').eq('user_id', currentUser.id).maybeSingle();
+  if(!error && data){
+    document.getElementById('profile-name').value = data.name || '';
+    document.getElementById('profile-bio').value = data.bio || '';
+    document.getElementById('profile-instagram').value = data.instagram || '';
+    document.getElementById('profile-whatsapp').value = data.whatsapp || '';
+    document.getElementById('profile-website').value = data.website || '';
+    document.getElementById('profile-address').value = data.clinic_address || '';
+    document.getElementById('profile-email').value = data.email || '';
+  }
+  document.getElementById('profile-error').textContent = '';
+  profileOverlay.classList.add('visible');
+});
+
+document.getElementById('profile-cancel').addEventListener('click', () => {
+  profileOverlay.classList.remove('visible');
+});
+
+document.getElementById('profile-save').addEventListener('click', async () => {
+  const errEl = document.getElementById('profile-error');
+  errEl.textContent = '';
+  try{
+    const { error } = await sb.from('author_profiles').upsert({
+      user_id: currentUser.id,
+      name: document.getElementById('profile-name').value.trim(),
+      bio: document.getElementById('profile-bio').value.trim(),
+      instagram: document.getElementById('profile-instagram').value.trim(),
+      whatsapp: document.getElementById('profile-whatsapp').value.trim(),
+      website: document.getElementById('profile-website').value.trim(),
+      clinic_address: document.getElementById('profile-address').value.trim(),
+      email: document.getElementById('profile-email').value.trim(),
+      updated_at: new Date().toISOString()
+    });
+    if(error) throw error;
+    profileOverlay.classList.remove('visible');
+  }catch(err){
+    errEl.textContent = 'Erro ao salvar: ' + err.message;
+  }
+});
+
+function hexToRgba(hex, alpha){
+  if(!hex) return `rgba(201,168,76,${alpha})`;
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const bigint = parseInt(full, 16);
+  const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 /* ---------- Prévia diagramada (visualizador página a página) ---------- */
 let bookPages = []; // array de strings HTML, uma por página
 let currentPageIndex = 0;
@@ -1242,24 +1337,55 @@ async function buildBookPages(){
       return { number: null, rest: title };
     }
 
-    chapters.forEach((chapter) => {
+    // Página de sumário (só faz sentido se houver mais de 1 capítulo identificado)
+    if(chapters.length > 1){
+      pageCounter++;
+      const summaryItems = chapters.map((chapter, idx) => {
+        const parts = chapter.title ? splitChapterTitle(chapter.title) : null;
+        const num = parts?.number || String(idx + 1).padStart(2, '0');
+        const label = parts?.rest || chapter.title || `Parte ${idx + 1}`;
+        return `<div style="display:flex; align-items:baseline; padding:11px 0; border-bottom:1px solid rgba(0,0,0,.08);">
+          <span style="color:${accentColor}; font-weight:700; font-size:13px; margin-right:14px;">${num}</span>
+          <span style="font-size:14px; color:#3a3428;">${escapeHtml(label)}</span>
+        </div>`;
+      }).join('');
+
+      const summaryInner = `
+        <div style="font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:${accentColor}; margin-bottom:10px;">SUMÁRIO</div>
+        <h2 class="chapter-title" style="margin-bottom:24px;">Neste e-book</h2>
+        ${summaryItems}
+        <div class="page-footer">${pageCounter}</div>`;
+      bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${summaryInner}</div>`);
+    }
+
+    chapters.forEach((chapter, chapterIdx) => {
       const pages = chunkParagraphsIntoPages(chapter.body, wordsPerPage);
       const matchedIllustration = illustrationsWithUrls.find(ill =>
         chapter.title && ill.prompt.toLowerCase().includes(chapter.title.toLowerCase().slice(0, 15))
       );
       const chapterParts = chapter.title ? splitChapterTitle(chapter.title) : null;
       const chapterHeaderLabel = chapterParts?.rest || chapter.title || bookTitleUpper;
+      const palette = brief.palette || [];
+      const chapterAccent = palette.length ? palette[chapterIdx % palette.length] : accentColor;
+      const categoryLabel = (p.category || '').replace(/_/g, ' ').toUpperCase();
 
       pages.forEach((paragraphs, pageIdxInChapter) => {
         pageCounter++;
         const isChapterOpening = pageIdxInChapter === 0;
         let inner = `<div class="running-header"><span>${escapeHtml(bookTitleUpper)}</span><span>${escapeHtml((chapterHeaderLabel || '').toUpperCase())}</span></div>`;
 
-        if(isChapterOpening && chapterParts?.number){
-          inner += `<div class="chapter-number">CAPÍTULO ${chapterParts.number}</div>`;
-        }
-        if(isChapterOpening && chapterParts?.rest){
-          inner += `<h2 class="chapter-title">${escapeHtml(chapterParts.rest)}</h2><div class="chapter-rule"></div>`;
+        if(isChapterOpening && (chapterParts?.number || chapterParts?.rest)){
+          inner += `<div style="background:${hexToRgba(chapterAccent, 0.12)}; border-left:4px solid ${chapterAccent}; border-radius:6px; padding:18px 20px; margin-bottom:28px;">`;
+          if(categoryLabel){
+            inner += `<div style="font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:${chapterAccent}; margin-bottom:6px;">${escapeHtml(categoryLabel)}</div>`;
+          }
+          if(chapterParts?.number){
+            inner += `<div style="font-size:13px; font-weight:700; letter-spacing:.12em; color:${chapterAccent}; margin-bottom:6px;">CAPÍTULO ${chapterParts.number}</div>`;
+          }
+          if(chapterParts?.rest){
+            inner += `<h2 class="chapter-title" style="margin:0;">${escapeHtml(chapterParts.rest)}</h2>`;
+          }
+          inner += `</div>`;
         }
         if(isChapterOpening && matchedIllustration){
           inner += `<img class="chapter-image" src="${matchedIllustration.url}" />`;
@@ -1273,9 +1399,31 @@ async function buildBookPages(){
         }).join('');
 
         inner += `<div class="page-footer">${pageCounter}</div>`;
-        bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${inner}</div>`);
+        bookPages.push(`<div class="book-page" style="--book-accent:${chapterAccent};">${inner}</div>`);
       });
     });
+
+    // Página final: sobre o autor
+    const { data: profile } = await sb.from('author_profiles').select('*').eq('user_id', currentUser.id).maybeSingle();
+    if(profile && (profile.name || profile.bio)){
+      pageCounter++;
+      const contactLines = [
+        profile.instagram ? `📷 Instagram: ${escapeHtml(profile.instagram)}` : '',
+        profile.whatsapp ? `💬 WhatsApp: ${escapeHtml(profile.whatsapp)}` : '',
+        profile.website ? `🌐 Site: ${escapeHtml(profile.website)}` : '',
+        profile.clinic_address ? `📍 Consultório: ${escapeHtml(profile.clinic_address)}` : '',
+        profile.email ? `✉️ E-mail: ${escapeHtml(profile.email)}` : ''
+      ].filter(Boolean).map(line => `<div style="margin-bottom:8px;">${line}</div>`).join('');
+
+      const authorInner = `
+        <div class="running-header"><span>${escapeHtml(bookTitleUpper)}</span><span>SOBRE O AUTOR</span></div>
+        <h2 class="chapter-title">${escapeHtml(profile.name || 'Sobre o autor')}</h2>
+        <div class="chapter-rule"></div>
+        ${profile.bio ? `<p class="no-indent">${escapeHtml(profile.bio)}</p>` : ''}
+        <div style="margin-top:26px; font-size:13.5px; color:#3a3428;">${contactLines}</div>
+        <div class="page-footer">${pageCounter}</div>`;
+      bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${authorInner}</div>`);
+    }
 
     currentPageIndex = 0;
     renderCurrentPage();
