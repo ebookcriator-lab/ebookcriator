@@ -252,6 +252,54 @@
   .illustration-point .placement{ font-size:11.5px; color: var(--teal); text-transform:uppercase; letter-spacing:.05em; }
   .illustration-point .concept{ font-size:13px; color:var(--ink-muted); margin-top:2px; }
 
+  /* ---------- Prévia diagramada (páginas de "papel") ---------- */
+  .book-page{
+    background: #fdfaf3;
+    color: #262115;
+    width: 100%;
+    max-width: 560px;
+    min-height: 720px;
+    margin: 0 auto 32px;
+    padding: 64px 56px;
+    border-radius: 3px;
+    box-shadow: var(--shadow);
+    position: relative;
+    font-family: 'DM Sans', serif;
+  }
+  .book-page.cover{
+    padding: 0;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+    min-height: 720px;
+  }
+  .book-page h2.chapter-title{
+    font-size: 23px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0 0 22px;
+    color: #1a1710;
+  }
+  .book-page img.chapter-image{
+    width: 100%;
+    border-radius: 4px;
+    margin-bottom: 22px;
+    display: block;
+  }
+  .book-page p{
+    font-size: 14.5px;
+    line-height: 1.75;
+    margin: 0 0 14px;
+    color: #3a3428;
+  }
+  .book-page .page-number{
+    position: absolute;
+    bottom: 22px;
+    right: 28px;
+    font-size: 11px;
+    color: #9a917c;
+  }
+
   /* ---------- Modal ---------- */
   .overlay{
     position:fixed; inset:0; background: rgba(6,11,20,.72);
@@ -427,6 +475,24 @@
 
         <div id="image-gen-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
         <div id="generated-gallery" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;"></div>
+      </div>
+
+      <div class="card" style="margin-top:24px;">
+        <h3>Prévia do e-book (diagramação)</h3>
+        <p class="muted" style="font-size:13px; margin-bottom:14px;">
+          Monta o texto e as imagens geradas num layout de páginas, como ficaria o e-book final.
+        </p>
+        <button class="btn-primary" id="btn-render-preview">📖 Gerar prévia diagramada</button>
+        <div id="preview-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
+
+        <div id="book-viewer" style="display:none; margin-top:20px;">
+          <div id="book-page-slot" style="display:flex; justify-content:center;"></div>
+          <div style="display:flex; justify-content:center; align-items:center; gap:18px; margin-top:18px;">
+            <button class="btn-ghost" id="btn-prev-page">← Anterior</button>
+            <span class="muted" id="page-indicator" style="font-size:13px;"></span>
+            <button class="btn-ghost" id="btn-next-page">Próxima →</button>
+          </div>
+        </div>
       </div>
 
       <div class="card" style="margin-top:24px;">
@@ -1031,7 +1097,148 @@ async function renderGeneratedImages(project){
   }
 }
 
-/* ---------- Lightbox: visualização ampliada ---------- */
+/* ---------- Prévia diagramada (visualizador página a página) ---------- */
+let bookPages = []; // array de strings HTML, uma por página
+let currentPageIndex = 0;
+
+function parseChapters(fullText){
+  const regex = /(Cap[ií]tulo\s+\d+[:\-]?\s*[^\n]*)/gi;
+  const matches = [...fullText.matchAll(regex)];
+  if(matches.length === 0){
+    return [{ title: null, body: fullText }];
+  }
+  const chapters = [];
+  for(let i = 0; i < matches.length; i++){
+    const start = matches[i].index;
+    const end = i + 1 < matches.length ? matches[i + 1].index : fullText.length;
+    const titleLine = matches[i][1].trim();
+    const bodyStart = start + matches[i][0].length;
+    const body = fullText.slice(bodyStart, end).trim();
+    chapters.push({ title: titleLine, body });
+  }
+  return chapters;
+}
+
+function chunkParagraphsIntoPages(text, wordsPerPage){
+  const paragraphs = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  const pages = [];
+  let current = [];
+  let currentWords = 0;
+  for(const para of paragraphs){
+    const paraWords = para.split(/\s+/).filter(Boolean).length;
+    if(currentWords + paraWords > wordsPerPage && current.length > 0){
+      pages.push(current);
+      current = [];
+      currentWords = 0;
+    }
+    current.push(para);
+    currentWords += paraWords;
+  }
+  if(current.length) pages.push(current);
+  return pages.length ? pages : [[text]];
+}
+
+async function buildBookPages(){
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+
+  const statusEl = document.getElementById('preview-status');
+  const btn = document.getElementById('btn-render-preview');
+  btn.disabled = true;
+  statusEl.textContent = 'Montando a prévia...';
+  bookPages = [];
+
+  try{
+    if(!p.source_file_path) throw new Error('Este projeto não tem um arquivo de texto associado.');
+
+    const { data: fileData, error: dlErr } = await sb.storage.from('uploads').download(p.source_file_path);
+    if(dlErr) throw dlErr;
+    const fullText = await extractTextFromFile(fileData, p.source_filename);
+
+    const { data: images } = await sb
+      .from('generated_images')
+      .select('*')
+      .eq('project_id', p.id)
+      .order('created_at', { ascending: true });
+
+    const coverRow = (images || []).slice().reverse().find(r => r.role === 'cover');
+    const illustrationRows = (images || []).filter(r => r.role === 'chapter-illustration');
+
+    let coverUrl = null;
+    if(coverRow){
+      const { data: urlData } = await sb.storage.from('generated-assets').createSignedUrl(coverRow.result_path, 3600);
+      coverUrl = urlData?.signedUrl || null;
+    }
+
+    const illustrationsWithUrls = [];
+    for(const row of illustrationRows){
+      const { data: urlData } = await sb.storage.from('generated-assets').createSignedUrl(row.result_path, 3600);
+      if(urlData) illustrationsWithUrls.push({ prompt: row.prompt || '', url: urlData.signedUrl });
+    }
+
+    // Página de capa
+    const coverStyle = coverUrl
+      ? `background-image:url('${coverUrl}'); background-size:cover; background-position:center;`
+      : `background: linear-gradient(160deg, #0A1628, #16294a);`;
+    bookPages.push(`
+      <div class="book-page cover" style="${coverStyle}">
+        <div style="padding:40px; background:linear-gradient(0deg, rgba(0,0,0,.6), transparent); width:100%;">
+          <div style="color:#C9A84C; font-size:11px; letter-spacing:.15em; text-transform:uppercase; margin-bottom:8px;">${escapeHtml(p.category || '')}</div>
+          <div style="color:white; font-size:26px; font-weight:800;">${escapeHtml(p.title)}</div>
+        </div>
+      </div>`);
+
+    const chapters = parseChapters(fullText);
+    const wordsPerPage = 320;
+    let pageCounter = 1;
+
+    chapters.forEach((chapter) => {
+      const pages = chunkParagraphsIntoPages(chapter.body, wordsPerPage);
+      const matchedIllustration = illustrationsWithUrls.find(ill =>
+        chapter.title && ill.prompt.toLowerCase().includes(chapter.title.toLowerCase().slice(0, 15))
+      );
+
+      pages.forEach((paragraphs, pageIdxInChapter) => {
+        pageCounter++;
+        let inner = '';
+        if(pageIdxInChapter === 0 && chapter.title){
+          inner += `<h2 class="chapter-title">${escapeHtml(chapter.title)}</h2>`;
+        }
+        if(pageIdxInChapter === 0 && matchedIllustration){
+          inner += `<img class="chapter-image" src="${matchedIllustration.url}" />`;
+        }
+        inner += paragraphs.map(par => `<p>${escapeHtml(par)}</p>`).join('');
+        inner += `<div class="page-number">Página ${pageCounter}</div>`;
+        bookPages.push(`<div class="book-page">${inner}</div>`);
+      });
+    });
+
+    currentPageIndex = 0;
+    renderCurrentPage();
+    document.getElementById('book-viewer').style.display = 'block';
+    statusEl.textContent = `✓ Prévia montada — ${bookPages.length} páginas.`;
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro: ' + err.message;
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderCurrentPage(){
+  document.getElementById('book-page-slot').innerHTML = bookPages[currentPageIndex] || '';
+  document.getElementById('page-indicator').textContent = `Página ${currentPageIndex + 1} de ${bookPages.length}`;
+  document.getElementById('btn-prev-page').disabled = currentPageIndex === 0;
+  document.getElementById('btn-next-page').disabled = currentPageIndex === bookPages.length - 1;
+}
+
+document.getElementById('btn-render-preview').addEventListener('click', buildBookPages);
+document.getElementById('btn-prev-page').addEventListener('click', () => {
+  if(currentPageIndex > 0){ currentPageIndex--; renderCurrentPage(); }
+});
+document.getElementById('btn-next-page').addEventListener('click', () => {
+  if(currentPageIndex < bookPages.length - 1){ currentPageIndex++; renderCurrentPage(); }
+});
 function openLightbox(url){
   document.getElementById('lightbox-img').src = url;
   document.getElementById('lightbox-overlay').classList.add('visible');
