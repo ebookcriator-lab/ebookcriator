@@ -300,6 +300,47 @@
     color: #9a917c;
   }
 
+  .book-page .running-header{
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+    color:#9a917c; margin-bottom:30px; padding-bottom:12px;
+    border-bottom:1px solid rgba(0,0,0,.09);
+  }
+  .book-page .chapter-number{
+    font-size:13px; font-weight:700; letter-spacing:.12em;
+    color: var(--book-accent, #C9A84C); margin-bottom:6px;
+  }
+  .book-page h2.chapter-title{
+    font-size: 25px; font-weight: 800; letter-spacing:-.01em;
+    margin: 0 0 16px; color: #1a1710; line-height:1.25;
+  }
+  .book-page .chapter-rule{
+    width:46px; height:3px; background: var(--book-accent, #C9A84C);
+    margin-bottom:28px; border-radius:2px;
+  }
+  .book-page p{
+    font-size: 14px;
+    line-height: 1.85;
+    margin: 0;
+    text-align: justify;
+    hyphens: auto;
+    color: #3a3428;
+  }
+  .book-page p + p{ text-indent: 1.5em; margin-top: 2px; }
+  .book-page p.no-indent{ text-indent: 0; }
+  .book-page p.drop-cap::first-letter{
+    float:left; font-size:54px; line-height:.78; font-weight:800;
+    padding:6px 10px 0 0; color: var(--book-accent, #C9A84C);
+  }
+  .book-page .page-footer{
+    position:absolute; bottom:28px; left:0; right:0; text-align:center;
+    font-size:10.5px; color:#9a917c; letter-spacing:.05em;
+  }
+  .book-page .page-footer::before{
+    content:''; display:block; width:26px; height:1px;
+    background:rgba(0,0,0,.15); margin:0 auto 8px;
+  }
+
   /* ---------- Modal ---------- */
   .overlay{
     position:fixed; inset:0; background: rgba(6,11,20,.72);
@@ -1191,25 +1232,48 @@ async function buildBookPages(){
     const chapters = parseChapters(fullText);
     const wordsPerPage = 320;
     let pageCounter = 1;
+    const brief = p.design_tokens || {};
+    const accentColor = (brief.palette && brief.palette[0]) || '#C9A84C';
+    const bookTitleUpper = (p.title || '').toUpperCase();
+
+    function splitChapterTitle(title){
+      const m = title.match(/Cap[ií]tulo\s+(\d+)[:\-]?\s*(.*)/i);
+      if(m) return { number: m[1].padStart(2, '0'), rest: m[2] || '' };
+      return { number: null, rest: title };
+    }
 
     chapters.forEach((chapter) => {
       const pages = chunkParagraphsIntoPages(chapter.body, wordsPerPage);
       const matchedIllustration = illustrationsWithUrls.find(ill =>
         chapter.title && ill.prompt.toLowerCase().includes(chapter.title.toLowerCase().slice(0, 15))
       );
+      const chapterParts = chapter.title ? splitChapterTitle(chapter.title) : null;
+      const chapterHeaderLabel = chapterParts?.rest || chapter.title || bookTitleUpper;
 
       pages.forEach((paragraphs, pageIdxInChapter) => {
         pageCounter++;
-        let inner = '';
-        if(pageIdxInChapter === 0 && chapter.title){
-          inner += `<h2 class="chapter-title">${escapeHtml(chapter.title)}</h2>`;
+        const isChapterOpening = pageIdxInChapter === 0;
+        let inner = `<div class="running-header"><span>${escapeHtml(bookTitleUpper)}</span><span>${escapeHtml((chapterHeaderLabel || '').toUpperCase())}</span></div>`;
+
+        if(isChapterOpening && chapterParts?.number){
+          inner += `<div class="chapter-number">CAPÍTULO ${chapterParts.number}</div>`;
         }
-        if(pageIdxInChapter === 0 && matchedIllustration){
+        if(isChapterOpening && chapterParts?.rest){
+          inner += `<h2 class="chapter-title">${escapeHtml(chapterParts.rest)}</h2><div class="chapter-rule"></div>`;
+        }
+        if(isChapterOpening && matchedIllustration){
           inner += `<img class="chapter-image" src="${matchedIllustration.url}" />`;
         }
-        inner += paragraphs.map(par => `<p>${escapeHtml(par)}</p>`).join('');
-        inner += `<div class="page-number">Página ${pageCounter}</div>`;
-        bookPages.push(`<div class="book-page">${inner}</div>`);
+
+        inner += paragraphs.map((par, i) => {
+          const isFirstParagraphOfPage = i === 0;
+          const useDropCap = isChapterOpening && isFirstParagraphOfPage && !matchedIllustration;
+          const cls = [isFirstParagraphOfPage ? 'no-indent' : '', useDropCap ? 'drop-cap' : ''].filter(Boolean).join(' ');
+          return `<p class="${cls}">${escapeHtml(par)}</p>`;
+        }).join('');
+
+        inner += `<div class="page-footer">${pageCounter}</div>`;
+        bookPages.push(`<div class="book-page" style="--book-accent:${accentColor};">${inner}</div>`);
       });
     });
 
