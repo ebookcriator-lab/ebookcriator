@@ -403,6 +403,17 @@
       </div>
 
       <div class="card" style="margin-top:24px;">
+        <h3>Imagens geradas</h3>
+        <p class="muted" style="font-size:13px; margin-bottom:14px;">
+          Capa e ilustrações geradas pela IA a partir do brief de design e das
+          referências visuais que você enviou.
+        </p>
+        <button class="btn-primary" id="btn-generate-cover">🎨 Gerar capa</button>
+        <div id="image-gen-status" class="muted" style="font-size:12.5px; margin-top:10px; min-height:16px;"></div>
+        <div id="generated-gallery" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;"></div>
+      </div>
+
+      <div class="card" style="margin-top:24px;">
         <h3>Referências visuais de design</h3>
         <p class="muted" style="font-size:13px; margin-bottom:14px;">
           Envie capas, paletas ou páginas de outros livros que representem o estilo
@@ -657,6 +668,7 @@ function renderProjectView(){
     p.source_filename ? `📄 ${p.source_filename}` : 'Nenhum arquivo enviado ainda.';
   renderReferenceThumbnails(p);
   renderDesignBrief(p);
+  renderGeneratedImages(p);
 }
 
 /* ---------- Brief de design por IA ---------- */
@@ -687,14 +699,23 @@ function renderDesignBrief(project){
 
   const illustrationsEl = document.getElementById('brief-illustrations');
   illustrationsEl.innerHTML = '';
-  (brief.illustration_points || []).forEach(point => {
+  (brief.illustration_points || []).forEach((point, idx) => {
     const item = document.createElement('div');
     item.className = 'illustration-point';
     item.innerHTML = `
       <div class="chapter">${escapeHtml(point.chapter || '')}</div>
       <div class="placement">${escapeHtml(point.placement || '')}</div>
-      <div class="concept">${escapeHtml(point.concept || '')}</div>`;
+      <div class="concept">${escapeHtml(point.concept || '')}</div>
+      <button class="btn-ghost gen-illustration-btn" data-idx="${idx}" style="margin-top:8px; padding:6px 14px; font-size:12.5px;">🎨 Gerar imagem</button>`;
     illustrationsEl.appendChild(item);
+  });
+
+  illustrationsEl.querySelectorAll('.gen-illustration-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const point = (brief.illustration_points || [])[idx];
+      if(point) generateIllustrationForPoint(point, btn);
+    });
   });
 }
 
@@ -785,6 +806,159 @@ document.getElementById('btn-mark-reference').addEventListener('click', async ()
     btn.disabled = false;
   }
 });
+
+/* ---------- Geração de imagens por IA ---------- */
+async function blobToBase64(blob){
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for(let i = 0; i < bytes.length; i += chunkSize){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function getReferenceImagesBase64(project, max = 3){
+  const paths = (project.reference_image_paths || []).slice(0, max);
+  const results = [];
+  for(const path of paths){
+    try{
+      const { data, error } = await sb.storage.from('uploads').download(path);
+      if(error || !data) continue;
+      const base64 = await blobToBase64(data);
+      results.push({ mimeType: data.type || 'image/jpeg', data: base64 });
+    }catch(e){ console.warn('Falha ao carregar referência', path, e); }
+  }
+  return results;
+}
+
+async function generateAndSaveImage(prompt, role){
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+
+  const referenceImages = await getReferenceImagesBase64(p);
+
+  const { data, error } = await sb.functions.invoke('generate-image', {
+    body: { prompt, referenceImages }
+  });
+  if(error) throw error;
+  if(data?.error) throw new Error(data.error);
+
+  const byteChars = atob(data.imageBase64);
+  const byteNumbers = new Array(byteChars.length);
+  for(let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: data.mimeType || 'image/png' });
+
+  const path = `${currentUser.id}/${p.id}/${Date.now()}-${role}.png`;
+  const { error: uploadError } = await sb.storage.from('generated-assets').upload(path, blob);
+  if(uploadError) throw uploadError;
+
+  const { error: insertError } = await sb.from('generated_images').insert({
+    project_id: p.id,
+    source_type: referenceImages.length > 0 ? 'reference' : 'prompt',
+    prompt,
+    result_path: path,
+    model_used: 'gemini-3.1-flash-image-preview',
+    role
+  });
+  if(insertError) throw insertError;
+}
+
+function buildCoverPrompt(project){
+  const brief = project.design_tokens || {};
+  const paletteText = (brief.palette || []).join(', ');
+  return `Capa profissional de e-book para o livro "${project.title}". ` +
+    `Tom visual: ${brief.tone || 'profissional'}. ` +
+    `Paleta de cores a seguir: ${paletteText || 'harmônica e sóbria'}. ` +
+    `Estilo editorial de alta qualidade, digno de uma grande editora, composição limpa com espaço reservado para o título. ` +
+    `Use as imagens de referência fornecidas como guia de estilo visual, se houver.`;
+}
+
+function buildIllustrationPrompt(project, point){
+  const brief = project.design_tokens || {};
+  const paletteText = (brief.palette || []).join(', ');
+  return `Ilustração editorial para um e-book, para a seção "${point.chapter}". ` +
+    `Posicionamento: ${point.placement}. ` +
+    `Conceito: ${point.concept}. ` +
+    `Tom visual: ${brief.tone || 'profissional'}. Paleta de cores: ${paletteText || 'harmônica e sóbria'}. ` +
+    `Estilo profissional, coerente com o restante do e-book. ` +
+    `Use as imagens de referência fornecidas como guia de estilo visual, se houver.`;
+}
+
+document.getElementById('btn-generate-cover').addEventListener('click', async () => {
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+  const statusEl = document.getElementById('image-gen-status');
+  const btn = document.getElementById('btn-generate-cover');
+  btn.disabled = true;
+  statusEl.textContent = 'Gerando capa com IA...';
+  try{
+    await generateAndSaveImage(buildCoverPrompt(p), 'cover');
+    statusEl.textContent = '✓ Capa gerada!';
+    await renderGeneratedImages(p);
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro: ' + err.message;
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+async function generateIllustrationForPoint(point, btn){
+  const p = currentProjects.find(x => x.id === activeProjectId);
+  if(!p) return;
+  const statusEl = document.getElementById('image-gen-status');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Gerando...';
+  statusEl.textContent = `Gerando ilustração para "${point.chapter}"...`;
+  try{
+    await generateAndSaveImage(buildIllustrationPrompt(p, point), 'chapter-illustration');
+    statusEl.textContent = '✓ Ilustração gerada!';
+    await renderGeneratedImages(p);
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Erro: ' + err.message;
+  }finally{
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+
+async function renderGeneratedImages(project){
+  const container = document.getElementById('generated-gallery');
+  container.innerHTML = '';
+
+  const { data: rows, error } = await sb
+    .from('generated_images')
+    .select('*')
+    .eq('project_id', project.id)
+    .order('created_at', { ascending: false });
+
+  if(error || !rows) return;
+
+  for(const row of rows){
+    const thumb = document.createElement('div');
+    thumb.className = 'ref-thumb loading';
+    thumb.style.width = '140px';
+    thumb.style.height = '140px';
+    container.appendChild(thumb);
+
+    const { data: urlData, error: urlError } = await sb.storage
+      .from('generated-assets')
+      .createSignedUrl(row.result_path, 3600);
+
+    thumb.classList.remove('loading');
+    if(urlError || !urlData){ thumb.textContent = 'erro'; continue; }
+
+    const img = document.createElement('img');
+    img.src = urlData.signedUrl;
+    img.title = row.prompt || '';
+    thumb.appendChild(img);
+  }
+}
 
 /* ---------- Referências visuais de design ---------- */
 const refDropzone = document.getElementById('ref-dropzone');
